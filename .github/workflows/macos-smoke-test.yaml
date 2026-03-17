@@ -1,0 +1,150 @@
+name: macOS Smoke Test
+on:
+  # Run on push and pull requests, but limit to important branches to save macOS runner minutes
+  push:
+    branches:
+      - master
+      - release-*
+  pull_request:
+    # Only run when relevant files are changed
+    paths:
+      - 'hack/**'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/macos-smoke-test.yaml'
+  # Allow manual triggering for testing
+  workflow_dispatch:
+
+# https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
+concurrency:
+  group: ${{ github.workflow }}-${{ github.actor }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read  # for actions/checkout to fetch code
+
+jobs:
+  macos-smoke-test:
+    name: macOS Smoke Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60  # Increased for image building on macOS
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Intel Mac
+          - os: macos-13
+            arch: intel
+          # Apple Silicon Mac
+          - os: macos-14
+            arch: apple-silicon
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: verify system architecture
+        run: |
+          uname -a
+          go env GOOS GOARCH
+
+      - name: start Docker
+        run: |
+          # On macOS GitHub runners, Docker Desktop should be pre-installed but may not be running
+          if ! docker info &> /dev/null; then
+            open -a Docker || true
+            # Wait for Docker to start (up to 2 minutes)
+            for i in {1..60}; do
+              if docker info &> /dev/null; then
+                break
+              fi
+              sleep 2
+            done
+
+            if ! docker info &> /dev/null; then
+              echo "ERROR: Failed to start Docker daemon"
+              exit 1
+            fi
+          fi
+
+      - name: setup environment and build
+        run: |
+          export BUILD_FROM_SOURCE=true
+          hack/setup-dev-base.sh
+
+      - name: deploy karmada
+        run: |
+          export KUBECONFIG="${HOME}/.kube/karmada.config"
+          export HOST_CLUSTER_NAME="karmada-host"
+          hack/deploy-karmada.sh "${KUBECONFIG}" "${HOST_CLUSTER_NAME}"
+          kubectl wait --for=condition=Available --timeout=5m -n karmada-system deployment --all
+
+      - name: join member cluster
+        run: |
+          echo "::group::Joining cluster"
+          export MAIN_KUBECONFIG="${HOME}/.kube/karmada.config"
+          export MEMBER_KUBECONFIG="${HOME}/.kube/members.config"
+          export KUBECONFIG="${MAIN_KUBECONFIG}"
+          export HOST_CLUSTER_NAME="karmada-host"
+          export KARMADA_APISERVER_CLUSTER_NAME="karmada-apiserver"
+          export MEMBER_CLUSTER_1_NAME="member1"
+
+          GOPATH=$(go env GOPATH | awk -F ':' '{print $1}')
+          KARMADACTL_BIN="${GOPATH}/bin/karmadactl"
+          ${KARMADACTL_BIN} join \
+            --karmada-context="${KARMADA_APISERVER_CLUSTER_NAME}" \
+            ${MEMBER_CLUSTER_1_NAME} \
+            --cluster-kubeconfig="${MEMBER_KUBECONFIG}" \
+            --cluster-context="${MEMBER_CLUSTER_1_NAME}"
+
+          # Deploy scheduler estimator
+          hack/deploy-scheduler-estimator.sh \
+            "${MAIN_KUBECONFIG}" \
+            "${HOST_CLUSTER_NAME}" \
+            "${MEMBER_KUBECONFIG}" \
+            "${MEMBER_CLUSTER_1_NAME}"
+          echo "::endgroup::"
+
+      - name: verify cluster
+        run: |
+          echo "::group::Verifying cluster"
+          export KUBECONFIG="${HOME}/.kube/karmada.config"
+          export KARMADA_APISERVER_CLUSTER_NAME="karmada-apiserver"
+          export MEMBER_CLUSTER_1_NAME="member1"
+          kubectl config use-context "${KARMADA_APISERVER_CLUSTER_NAME}"
+          for i in {1..36}; do
+            STATUS=$(kubectl get cluster ${MEMBER_CLUSTER_1_NAME} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+            if [ "$STATUS" = "True" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          # Final verification
+          STATUS=$(kubectl get cluster ${MEMBER_CLUSTER_1_NAME} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+          if [ "$STATUS" != "True" ]; then
+            echo "ERROR: Cluster ${MEMBER_CLUSTER_1_NAME} is not ready (status: $STATUS)"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-smoke-test-logs-${{ matrix.arch }}
+          path: |
+            /tmp/karmada/
+            ~/.kube/karmada.config
+            ~/.kube/members.config
+          retention-days: 7
+          if-no-files-found: ignore
