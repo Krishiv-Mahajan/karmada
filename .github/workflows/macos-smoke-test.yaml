@@ -1,6 +1,5 @@
 name: macOS Smoke Test
 on:
-  # Run on push and pull requests, but limit to important branches to save macOS runner minutes
   push:
     branches:
       - master
@@ -10,78 +9,99 @@ on:
     branches:
       - master
       - release-*
-  # Allow manual triggering for testing
   workflow_dispatch:
 
-# https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: read  # for actions/checkout to fetch code
+  contents: read
 
 env:
   BUILD_FROM_SOURCE: "true"
 
 jobs:
   macos-smoke-test:
-    name: macOS Smoke Test (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60  # Increased for image building on macOS
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Apple Silicon Mac (Intel Mac macos-13 not available on fork for testing)
-          - os: macos-14
-            arch: apple-silicon
+    name: macOS Smoke Test (apple-silicon)
+    runs-on: macos-14
+    timeout-minutes: 60
 
     steps:
-      - name: free disk space
+      - name: Free disk space
         run: |
           df -h
-          # Remove Xcode simulators and derived data (large, not needed for CI)
           sudo rm -rf ~/Library/Developer/Xcode/DerivedData
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches
-          # Clean brew cache
           brew cleanup --prune=all
           df -h
 
-      - name: checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: install Go
+      - name: Install Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: verify system architecture
+      - name: Verify system architecture
         run: |
           uname -a
           go env GOOS GOARCH
           sw_vers
           df -h
 
-      - name: install and start Docker
-        uses: docker/setup-docker-action@v4
-        with:
-          daemon-config: |
-            {
-              "dns": ["8.8.8.8"]
-            }
-
-      - name: setup and deploy karmada
+      - name: Install Docker via colima
         run: |
-          hack/local-up-karmada.sh
+          brew install docker colima
+          colima start \
+            --vm-type vz \
+            --vz-rosetta \
+            --cpu 3 \
+            --memory 6 \
+            --disk 60 \
+            --dns 8.8.8.8
+          docker info
+          docker version
 
-      - name: upload logs
+      - name: Setup and deploy Karmada
+        # local-up-karmada.sh internally:
+        #   - installs kind, kubectl, and other deps via setup-dev-base.sh
+        #   - brings up host cluster + control plane
+        #   - joins member1, member2 (push) and member3 (pull/agent)
+        #   - deploys scheduler-estimator and metrics-server per member
+        #   - blocks until all 3 clusters report Ready (exits non-zero on failure)
+        run: hack/local-up-karmada.sh
+
+      - name: Validate control plane and member clusters
+        # The script already waited for Ready — this just confirms the outcome
+        # and gives visible output in the job log for debugging.
+        run: |
+          export KUBECONFIG="${HOME}/.kube/karmada.config"
+
+          echo "=== API server health ==="
+          kubectl --context karmada-apiserver get --raw /healthz
+
+          echo "=== Registered member clusters ==="
+          kubectl --context karmada-apiserver get clusters
+
+          echo "=== Karmada system pods ==="
+          kubectl --context karmada-host get pods -n karmada-system
+
+          echo "=== Member cluster nodes ==="
+          export KUBECONFIG="${HOME}/.kube/members.config"
+          for ctx in member1 member2 member3; do
+            echo "--- $ctx ---"
+            kubectl --context "$ctx" get nodes
+          done
+
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-smoke-test-logs-${{ matrix.arch }}
+          name: macos-smoke-test-logs-apple-silicon
           path: |
             /tmp/karmada/
             ~/.kube/karmada.config
