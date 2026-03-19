@@ -65,24 +65,13 @@ jobs:
           sw_vers
           df -h
 
-      - name: install and start Docker (Colima)
-        run: |
-          # macOS GitHub runners do not have Docker pre-installed.
-          # Colima is a lightweight container runtime for macOS CI.
-          brew install colima docker
-          colima start --cpu 3 --memory 8
-          # Wait for Docker to be ready
-          for i in {1..30}; do
-            if docker info &> /dev/null; then
-              break
-            fi
-            sleep 2
-          done
-          if ! docker info &> /dev/null; then
-            echo "ERROR: Docker daemon failed to start"
-            exit 1
-          fi
-          docker --version
+      - name: install and start Docker
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {
+              "dns": ["8.8.8.8"]
+            }
 
       - name: setup and deploy karmada
         run: |
