@@ -15,11 +15,14 @@ on:
 
 # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
 concurrency:
-  group: ${{ github.workflow }}-${{ github.actor }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read  # for actions/checkout to fetch code
+
+env:
+  BUILD_FROM_SOURCE: "true"
 
 jobs:
   macos-smoke-test:
@@ -30,10 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Intel Mac
-          - os: macos-13
-            arch: intel
-          # Apple Silicon Mac
+          # Apple Silicon Mac (Intel Mac macos-13 not available on fork for testing)
           - os: macos-14
             arch: apple-silicon
 
@@ -49,12 +49,12 @@ jobs:
           df -h
 
       - name: checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
@@ -75,12 +75,11 @@ jobs:
 
       - name: setup and deploy karmada
         run: |
-          export BUILD_FROM_SOURCE=true
           hack/local-up-karmada.sh
 
       - name: upload logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: macos-smoke-test-logs-${{ matrix.arch }}
           path: |
