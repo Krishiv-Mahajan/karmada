@@ -65,23 +65,22 @@ jobs:
           sw_vers
           df -h
 
-      - name: start Docker
+      - name: install and start Docker (Colima)
         run: |
-          # On macOS GitHub runners, Docker Desktop should be pre-installed but may not be running
-          if ! docker info &> /dev/null; then
-            open -a Docker || true
-            # Wait for Docker to start (up to 2 minutes)
-            for i in {1..60}; do
-              if docker info &> /dev/null; then
-                break
-              fi
-              sleep 2
-            done
-
-            if ! docker info &> /dev/null; then
-              echo "ERROR: Failed to start Docker daemon"
-              exit 1
+          # macOS GitHub runners do not have Docker pre-installed.
+          # Colima is a lightweight container runtime for macOS CI.
+          brew install colima docker
+          colima start --cpu 3 --memory 8
+          # Wait for Docker to be ready
+          for i in {1..30}; do
+            if docker info &> /dev/null; then
+              break
             fi
+            sleep 2
+          done
+          if ! docker info &> /dev/null; then
+            echo "ERROR: Docker daemon failed to start"
+            exit 1
           fi
           docker --version
 
