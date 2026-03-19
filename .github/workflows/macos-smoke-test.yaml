@@ -55,7 +55,7 @@ jobs:
 
       - name: Install Docker via colima
         run: |
-          brew install docker colima
+          brew install docker colima qemu
           colima start \
             --vm-type vz \
             --cpu 3 \
