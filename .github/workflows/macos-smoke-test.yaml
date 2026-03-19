@@ -5,15 +5,11 @@ on:
     branches:
       - master
       - release-*
+      - localtest
   pull_request:
-    # Only run when relevant files are changed
-    paths:
-      - 'hack/**'
-      - 'cmd/**'
-      - 'pkg/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/macos-smoke-test.yaml'
+    branches:
+      - master
+      - release-*
   # Allow manual triggering for testing
   workflow_dispatch:
 
@@ -42,6 +38,16 @@ jobs:
             arch: apple-silicon
 
     steps:
+      - name: free disk space
+        run: |
+          df -h
+          # Remove Xcode simulators and derived data (large, not needed for CI)
+          sudo rm -rf ~/Library/Developer/Xcode/DerivedData
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches
+          # Clean brew cache
+          brew cleanup --prune=all
+          df -h
+
       - name: checkout code
         uses: actions/checkout@v6
         with:
@@ -56,6 +62,9 @@ jobs:
         run: |
           uname -a
           go env GOOS GOARCH
+          docker --version
+          sw_vers
+          df -h
 
       - name: start Docker
         run: |
@@ -76,69 +85,13 @@ jobs:
             fi
           fi
 
-      - name: setup environment and build
+      - name: setup and deploy karmada
         run: |
           export BUILD_FROM_SOURCE=true
-          hack/setup-dev-base.sh
+          hack/local-up-karmada.sh
 
-      - name: deploy karmada
-        run: |
-          export KUBECONFIG="${HOME}/.kube/karmada.config"
-          export HOST_CLUSTER_NAME="karmada-host"
-          hack/deploy-karmada.sh "${KUBECONFIG}" "${HOST_CLUSTER_NAME}"
-          kubectl wait --for=condition=Available --timeout=5m -n karmada-system deployment --all
-
-      - name: join member cluster
-        run: |
-          echo "::group::Joining cluster"
-          export MAIN_KUBECONFIG="${HOME}/.kube/karmada.config"
-          export MEMBER_KUBECONFIG="${HOME}/.kube/members.config"
-          export KUBECONFIG="${MAIN_KUBECONFIG}"
-          export HOST_CLUSTER_NAME="karmada-host"
-          export KARMADA_APISERVER_CLUSTER_NAME="karmada-apiserver"
-          export MEMBER_CLUSTER_1_NAME="member1"
-
-          GOPATH=$(go env GOPATH | awk -F ':' '{print $1}')
-          KARMADACTL_BIN="${GOPATH}/bin/karmadactl"
-          ${KARMADACTL_BIN} join \
-            --karmada-context="${KARMADA_APISERVER_CLUSTER_NAME}" \
-            ${MEMBER_CLUSTER_1_NAME} \
-            --cluster-kubeconfig="${MEMBER_KUBECONFIG}" \
-            --cluster-context="${MEMBER_CLUSTER_1_NAME}"
-
-          # Deploy scheduler estimator
-          hack/deploy-scheduler-estimator.sh \
-            "${MAIN_KUBECONFIG}" \
-            "${HOST_CLUSTER_NAME}" \
-            "${MEMBER_KUBECONFIG}" \
-            "${MEMBER_CLUSTER_1_NAME}"
-          echo "::endgroup::"
-
-      - name: verify cluster
-        run: |
-          echo "::group::Verifying cluster"
-          export KUBECONFIG="${HOME}/.kube/karmada.config"
-          export KARMADA_APISERVER_CLUSTER_NAME="karmada-apiserver"
-          export MEMBER_CLUSTER_1_NAME="member1"
-          kubectl config use-context "${KARMADA_APISERVER_CLUSTER_NAME}"
-          for i in {1..36}; do
-            STATUS=$(kubectl get cluster ${MEMBER_CLUSTER_1_NAME} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-            if [ "$STATUS" = "True" ]; then
-              break
-            fi
-            sleep 5
-          done
-
-          # Final verification
-          STATUS=$(kubectl get cluster ${MEMBER_CLUSTER_1_NAME} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
-          if [ "$STATUS" != "True" ]; then
-            echo "ERROR: Cluster ${MEMBER_CLUSTER_1_NAME} is not ready (status: $STATUS)"
-            exit 1
-          fi
-          echo "::endgroup::"
-
-      - name: upload logs on failure
-        if: failure()
+      - name: upload logs
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: macos-smoke-test-logs-${{ matrix.arch }}
