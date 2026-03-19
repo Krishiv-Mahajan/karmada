@@ -62,7 +62,6 @@ jobs:
         run: |
           uname -a
           go env GOOS GOARCH
-          docker --version
           sw_vers
           df -h
 
@@ -84,6 +83,7 @@ jobs:
               exit 1
             fi
           fi
+          docker --version
 
       - name: setup and deploy karmada
         run: |
