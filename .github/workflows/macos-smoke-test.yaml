@@ -32,6 +32,9 @@ jobs:
           fetch-depth: 0  # required for versioning via git tags
           fetch-tags: true
 
+      - name: Fetch tags for versioning
+        run: git fetch --tags --force origin
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -47,6 +50,7 @@ jobs:
 
       - name: Set binary output path
         run: |
+          # Depends on setup-go so GOOS/GOARCH resolve from the runner toolchain.
           echo "BIN_DIR=./_output/bin/$(go env GOOS)/$(go env GOARCH)" >> "$GITHUB_ENV"
 
       # Build all components
@@ -72,7 +76,7 @@ jobs:
           "$BIN_DIR"/karmadactl --help
           "$BIN_DIR"/karmadactl init --help
           "$BIN_DIR"/karmadactl join --help
-          "$BIN_DIR"/karmadactl version --client 2>&1 | grep -E 'karmada|v[0-9]' || {
+          "$BIN_DIR"/karmadactl version --client 2>&1 | grep -E 'GitVersion:"v[0-9]+\.[0-9]+\.[0-9]+' || {
             echo "Version output did not contain expected pattern"
             exit 1
           }
