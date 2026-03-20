@@ -28,7 +28,7 @@ jobs:
       matrix:
         include:
           - arch: intel
-            runner: macos-13
+            runner: macos-14-large
           - arch: apple-silicon
             runner: macos-14
 
