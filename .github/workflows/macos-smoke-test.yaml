@@ -21,13 +21,20 @@ permissions:
 
 jobs:
   macos-smoke-test:
-    name: macOS Smoke Test (apple-silicon)
-    runs-on: macos-14
+    name: macOS Smoke Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - arch: intel
+            runner: macos-13
+          - arch: apple-silicon
+            runner: macos-14
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # required for versioning via git tags
           fetch-tags: true
@@ -36,7 +43,7 @@ jobs:
         run: git fetch --tags --force origin
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -87,9 +94,9 @@ jobs:
 
       - name: Upload coverage (if present)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: macos-smoke-test-coverage
+          name: macos-smoke-test-coverage-${{ matrix.arch }}
           path: ./_output/coverage/
           retention-days: 1
           if-no-files-found: ignore
