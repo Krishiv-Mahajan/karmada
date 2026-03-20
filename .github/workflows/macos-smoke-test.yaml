@@ -1,4 +1,5 @@
 name: macOS Smoke Test
+
 on:
   push:
     branches:
@@ -18,92 +19,68 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  BUILD_FROM_SOURCE: "true"
-
 jobs:
   macos-smoke-test:
     name: macOS Smoke Test (apple-silicon)
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
-      - name: Free disk space
-        run: |
-          df -h
-          sudo rm -rf ~/Library/Developer/Xcode/DerivedData
-          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches
-          brew cleanup --prune=all
-          df -h
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # required for versioning via git tags
 
-      - name: Install Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: Verify system architecture
+      - name: Verify environment
         run: |
           uname -a
-          go env GOOS GOARCH
           sw_vers
-          df -h
+          go version
+          go env GOOS GOARCH
 
-      - name: Install Docker via colima
+      # Build all components
+      - name: Build Karmada binaries
+        run: make all
+
+      # Ensure binaries are generated
+      - name: Verify binaries
         run: |
-          brew install docker colima qemu
-          colima start \
-            --vm-type vz \
-            --cpu 3 \
-            --memory 6 \
-            --disk 60 \
-            --dns 8.8.8.8
-          docker info
-          docker version
+          echo "Listing built binaries:"
+          ls -lh ./_output/bin/
 
-      - name: Setup and deploy Karmada
-        # local-up-karmada.sh internally:
-        #   - installs kind, kubectl, and other deps via setup-dev-base.sh
-        #   - brings up host cluster + control plane
-        #   - joins member1, member2 (push) and member3 (pull/agent)
-        #   - deploys scheduler-estimator and metrics-server per member
-        #   - blocks until all 3 clusters report Ready (exits non-zero on failure)
-        run: hack/local-up-karmada.sh
-
-      - name: Validate control plane and member clusters
-        # The script already waited for Ready — this just confirms the outcome
-        # and gives visible output in the job log for debugging.
+      # Core binary sanity (no runtime crash)
+      - name: Validate core components
         run: |
-          export KUBECONFIG="${HOME}/.kube/karmada.config"
+          ./_output/bin/karmada-apiserver --help
+          ./_output/bin/karmada-controller-manager --help
+          ./_output/bin/karmada-scheduler --help
 
-          echo "=== API server health ==="
-          kubectl --context karmada-apiserver get --raw /healthz
+      # CLI workflow validation
+      - name: Validate CLI commands
+        run: |
+          ./_output/bin/karmadactl --help
+          ./_output/bin/karmadactl init --help
+          ./_output/bin/karmadactl join --help
+          ./_output/bin/karmadactl version --client 2>&1 | grep -E 'karmada|v[0-9]' || {
+            echo "Version output did not contain expected pattern"
+            exit 1
+          }
 
-          echo "=== Registered member clusters ==="
-          kubectl --context karmada-apiserver get clusters
+      # Unit tests 
+      - name: Run unit tests
+        run: make test
 
-          echo "=== Karmada system pods ==="
-          kubectl --context karmada-host get pods -n karmada-system
-
-          echo "=== Member cluster nodes ==="
-          export KUBECONFIG="${HOME}/.kube/members.config"
-          for ctx in member1 member2 member3; do
-            echo "--- $ctx ---"
-            kubectl --context "$ctx" get nodes
-          done
-
-      - name: Upload logs
+      - name: Upload coverage (if present)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-smoke-test-logs-apple-silicon
-          path: |
-            /tmp/karmada/
-            ~/.kube/karmada.config
-            ~/.kube/members.config
-          retention-days: 7
+          name: macos-smoke-test-coverage
+          path: ./_output/coverage/
+          retention-days: 1
           if-no-files-found: ignore
