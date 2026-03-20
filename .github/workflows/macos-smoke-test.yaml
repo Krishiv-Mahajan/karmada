@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # required for versioning via git tags
+          fetch-tags: true
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -44,6 +45,10 @@ jobs:
           go version
           go env GOOS GOARCH
 
+      - name: Set binary output path
+        run: |
+          echo "BIN_DIR=./_output/bin/$(go env GOOS)/$(go env GOARCH)" >> "$GITHUB_ENV"
+
       # Build all components
       - name: Build Karmada binaries
         run: make all
@@ -52,22 +57,22 @@ jobs:
       - name: Verify binaries
         run: |
           echo "Listing built binaries:"
-          ls -lh ./_output/bin/
+          ls -lh "$BIN_DIR"
 
       # Core binary sanity (no runtime crash)
       - name: Validate core components
         run: |
-          ./_output/bin/karmada-apiserver --help
-          ./_output/bin/karmada-controller-manager --help
-          ./_output/bin/karmada-scheduler --help
+          "$BIN_DIR"/karmada-aggregated-apiserver --help
+          "$BIN_DIR"/karmada-controller-manager --help
+          "$BIN_DIR"/karmada-scheduler --help
 
       # CLI workflow validation
       - name: Validate CLI commands
         run: |
-          ./_output/bin/karmadactl --help
-          ./_output/bin/karmadactl init --help
-          ./_output/bin/karmadactl join --help
-          ./_output/bin/karmadactl version --client 2>&1 | grep -E 'karmada|v[0-9]' || {
+          "$BIN_DIR"/karmadactl --help
+          "$BIN_DIR"/karmadactl init --help
+          "$BIN_DIR"/karmadactl join --help
+          "$BIN_DIR"/karmadactl version --client 2>&1 | grep -E 'karmada|v[0-9]' || {
             echo "Version output did not contain expected pattern"
             exit 1
           }
