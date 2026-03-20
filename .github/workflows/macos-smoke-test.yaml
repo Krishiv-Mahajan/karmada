@@ -27,6 +27,8 @@ jobs:
     strategy:
       matrix:
         include:
+          - arch: intel
+            runner: macos-15-intel  # x86_64, free tier, supported until Aug 2027
           - arch: apple-silicon
             runner: macos-14
 
