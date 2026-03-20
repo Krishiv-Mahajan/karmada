@@ -763,7 +763,8 @@ function util::get_macos_ipaddress() {
 }
 
 function util::get_version() {
-  git describe --tags --dirty
+  # Fall back to commit-derived identifiers when tags are unavailable in CI clones.
+  git describe --tags --dirty --always 2>/dev/null || git rev-parse --short HEAD
 }
 
 function util::version_ldflags() {

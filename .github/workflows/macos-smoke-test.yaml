@@ -76,7 +76,7 @@ jobs:
           "$BIN_DIR"/karmadactl --help
           "$BIN_DIR"/karmadactl init --help
           "$BIN_DIR"/karmadactl join --help
-          "$BIN_DIR"/karmadactl version --client 2>&1 | grep -E 'GitVersion:"v[0-9]+\.[0-9]+\.[0-9]+' || {
+          "$BIN_DIR"/karmadactl version --client 2>&1 | grep -E 'GitVersion:"[^"]+".*GitCommit:"[0-9a-f]{40}"' || {
             echo "Version output did not contain expected pattern"
             exit 1
           }
